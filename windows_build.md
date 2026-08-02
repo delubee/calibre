@@ -304,7 +304,31 @@ npm install -g rapydscript-ng
 
 安装后重新运行 `py.exe setup.py resources` 即可。
 
-### 5.2 已知问题：manual/locale/completed.json 缺失
+### 5.2 已知问题：安装后只有英文，无中文语言选项
+
+如果安装后 calibre 语言选择中没有中文，原因是翻译文件未编译。
+
+检查以下文件是否存在：
+
+```cmd
+dir C:\r\src\resources\localization\locales.zip
+dir C:\r\src\resources\localization\stats.calibre_msgpack
+```
+
+如果不存在，说明 bootstrap 时翻译仓库克隆失败（网络问题）。手动修复：
+
+```cmd
+cd C:\r\src
+git clone --depth=1 https://github.com/kovidgoyal/calibre-translations.git translations
+py.exe setup.py translations
+```
+
+编译成功后会生成 `locales.zip`（约 17MB）和 `stats.calibre_msgpack`，重新构建 MSI 即可。
+
+> **注意**：`--ephemeral` 参数会浅克隆翻译仓库，但如果网络不稳定可能静默失败。
+> 建议 bootstrap 后检查 `C:\r\src\translations` 目录是否存在。
+
+### 5.3 已知问题：manual/locale/completed.json 缺失
 
 如果报错 `FileNotFoundError: manual/locale/completed.json`，创建空文件：
 

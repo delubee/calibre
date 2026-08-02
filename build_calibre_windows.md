@@ -536,9 +536,19 @@ GBK 编码问题是中文 Windows 开发者的"老朋友"了。任何涉及子�
 
 ### 编译成功了，然后呢？
 
-安装自己编译的 MSI，打开 calibre——界面是英文的。
+安装自己编译的 MSI，打开 calibre——界面是英文的，语言选择里也只有 English，没有中文选项。
 
-这其实不算 bug。calibre 的中文翻译文件在 bootstrap 阶段已经编译，但首次启动时语言设置默认为 English。在设置中切换为中文后，界面正常显示中文。不过这也提醒我：后续修改源码时，需要关注翻译资源的完整性。
+排查后发现根因：bootstrap 阶段翻译仓库（`kovidgoyal/calibre-translations`）克隆失败（网络问题静默跳过），导致 `locales.zip` 和 `stats.calibre_msgpack` 从未生成。calibre 通过 `stats.calibre_msgpack` 判断可用语言列表，文件不存在就只显示英文。
+
+修复很简单：
+
+```powershell
+cd C:\r\src
+git clone --depth=1 https://github.com/kovidgoyal/calibre-translations.git translations
+py.exe setup.py translations
+```
+
+编译完成后 `resources/localization/` 下出现 17MB 的 `locales.zip`，重新构建 MSI，安装后中文语言选项正常出现。这个坑提醒我：bootstrap 后一定要检查 `translations` 目录是否存在。
 
 ### 下一步：解决中文文件名
 
