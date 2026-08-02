@@ -49,6 +49,19 @@ calibre binaries and installers for all the platforms calibre supports.
 **[Calibre Windows 构建指南](windows_build.md)**
 —— 纯 Windows 环境下从源码构建 MSI 安装包的详细步骤文档（中文）。
 
+## 本仓库的本地修改
+
+### 保存电子书时使用完整中文文件名
+
+calibre 默认将电子书保存到本地时，会将中文文件名转写为拼音（通过 `ascii_filename` 函数调用 ICU 转写）。
+本仓库将文件名生成逻辑改为使用 `sanitize_file_name`，保留原始中文字符，仅替换 Windows 不支持的特殊字符（`\ | ? * < " : > + /` 及控制字符）。
+
+涉及文件：
+- `src/calibre/db/backend.py` — `construct_path_name()` / `construct_file_name()`
+- `src/calibre/library/database2.py` — 同上（旧版 API）
+
+效果示例：`刘慈欣/三体 (1)/三体 - 刘慈欣.epub`
+
 ## calibre package versions in various repositories
 
 [![Packaging Status](https://repology.org/badge/vertical-allrepos/calibre.svg?columns=3&header=calibre)](https://repology.org/project/calibre/versions)
