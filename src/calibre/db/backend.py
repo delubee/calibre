@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, cast
 
 import apsw
 
-from calibre import as_unicode, force_unicode, prints
+from calibre import as_unicode, force_unicode, prints, sanitize_file_name
 from calibre.constants import builtin_colors_light, builtin_decorations, filesystem_encoding, iswindows, plugins, preferred_encoding
 from calibre.db import SPOOL_SIZE, FTSQueryError
 from calibre.db.annotations import annot_db_data, unicode_normalize
@@ -55,7 +55,6 @@ from calibre.utils.config import from_json, prefs, to_json, tweaks
 from calibre.utils.copy_files import copy_files, copy_tree, rename_files, windows_check_if_files_in_use
 from calibre.utils.date import EPOCH, parse_date, utcfromtimestamp, utcnow
 from calibre.utils.filenames import (
-    ascii_filename,
     atomic_rename,
     copyfile_using_links,
     copytree_using_links,
@@ -1654,8 +1653,8 @@ class DB:
         """
         book_id = BOOK_ID_PATH_TEMPLATE.format(book_id)
         l = self.PATH_LIMIT - (len(book_id) // 2) - 2
-        author = ascii_filename(author)[:l]
-        title = ascii_filename(title.lstrip())[:l].rstrip()
+        author = sanitize_file_name(author)[:l]
+        title = sanitize_file_name(title.lstrip())[:l].rstrip()
         if not title:
             title = 'Unknown'[:l]
         try:
@@ -1664,7 +1663,7 @@ class DB:
         except IndexError:
             author = ''
         if not author:
-            author = ascii_filename(_('Unknown'))
+            author = sanitize_file_name(_('Unknown'))
         if author.upper() in WINDOWS_RESERVED_NAMES:
             author += 'w'
         return f'{author}/{title}{book_id}'
@@ -1681,15 +1680,15 @@ class DB:
         l = (self.PATH_LIMIT - (extlen // 2) - 2) if iswindows else ((self.PATH_LIMIT - extlen - 2) // 2)
         if l < 5:
             raise ValueError(f'Extension length too long: {extlen}')
-        author = ascii_filename(author)[:l]
-        title = ascii_filename(title.lstrip())[:l].rstrip()
+        author = sanitize_file_name(author)[:l]
+        title = sanitize_file_name(title.lstrip())[:l].rstrip()
         if not title:
             title = 'Unknown'[:l]
         name = title + ' - ' + author
         while name.endswith('.'):
             name = name[:-1]
         if not name:
-            name = ascii_filename(_('Unknown'))
+            name = sanitize_file_name(_('Unknown'))
         return name
 
     # Database layer API {{{
