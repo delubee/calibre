@@ -198,7 +198,7 @@ def build_c_extensions(ext_dir, args):
     if rc != 0:
         print('Building of calibre C extensions failed, returncode:', rc, 'Failing cmd:', cmd, file=sys.stderr)
         os.chdir(CALIBRE_DIR)
-        run_shell()
+        pass  # run_shell() disabled
         raise SystemExit('Building of calibre C extensions failed')
     return ext_dir
 
@@ -209,7 +209,7 @@ def run_tests(path_to_calibre_debug, cwd_on_failure):
         os.chdir(cwd_on_failure)
         print(
             'running calibre build tests failed with return code:', ret, 'and exe:', path_to_calibre_debug, file=sys.stderr)
-        run_shell()
+        pass  # run_shell() disabled
         raise SystemExit('running calibre build tests failed')
 
 

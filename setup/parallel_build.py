@@ -35,9 +35,9 @@ def run_worker(job, decorate=True):
         return False, human_text, str(err)
     stdout, stderr = p.communicate()
     if stdout:
-        stdout = stdout.decode('utf-8')
+        stdout = stdout.decode('utf-8', errors='replace')
     if stderr:
-        stderr = stderr.decode('utf-8')
+        stderr = stderr.decode('utf-8', errors='replace')
     if decorate:
         stdout = human_text + '\n' + (stdout or '')
     ok = p.returncode == 0

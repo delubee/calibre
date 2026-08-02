@@ -129,6 +129,13 @@ def compiler():
                         return ['', int(os.path.getmtime(path) * 1000)]
                     except OSError:
                         pass
+            else:
+                # Handle direct absolute paths (from standalone compiler on Windows)
+                path = os.path.normpath(name)
+                try:
+                    return ['', int(os.path.getmtime(path) * 1000)]
+                except OSError:
+                    pass
             return ['ENOENT', f'No file named {name} exists in {rapydscript_dir}']
 
         @pyqtSlot(str, str, result='QVariant')
@@ -148,7 +155,38 @@ def compiler():
                             return ['', payload]
                         except OSError as e:
                             return ['EIO', str(e)]
+            else:
+                # Handle direct absolute paths (from standalone compiler on Windows)
+                path = os.path.normpath(name)
+                rs_norm = os.path.normpath(rapydscript_dir)
+                if path.lower().startswith(rs_norm.lower()):
+                    try:
+                        with open(path, 'rb') as f:
+                            ans = f.read()
+                        if encoding:
+                            payload = ans.decode(encoding)
+                        else:
+                            payload = standard_b64encode(ans).decode('ascii')
+                        return ['', payload]
+                    except OSError as e:
+                        return ['EIO', str(e)]
             return ['ENOENT', f'No file named {name} exists in {rapydscript_dir}']
+
+        @pyqtSlot(result='QVariant')
+        def get_pyj_files(self):
+            """Return all .pyj files from rapydscript_dir as {relative_path: content}"""
+            ans = {}
+            for root, dirs, files in os.walk(rapydscript_dir):
+                for f in files:
+                    if f.endswith('.pyj'):
+                        full = os.path.join(root, f)
+                        rel = os.path.relpath(full, rapydscript_dir).replace(os.sep, '/')
+                        try:
+                            with open(full, encoding='utf-8') as fh:
+                                ans[rel] = fh.read()
+                        except OSError:
+                            pass
+            return ans
 
     with lzma.open(P(COMPILER_PATH, allow_user_override=False)) as lzf:
         compiler_script = lzf.read().decode('utf-8')
@@ -232,14 +270,33 @@ RapydScript.virtual_file_system = {
     read_file: read_file, write_file: write_file, stat_file: stat_file,
 };
 
-let compiler_lazy = {promise: RapydScript.create_embedded_compiler()};
+// Pre-load all .pyj source files into file_data to bypass broken VFS namespace
+// On Windows, the compiler's internal namespace object differs from window.RapydScript
+function load_pyj_files() {
+    var pyj_files = py_bridge.get_pyj_files();
+    var pyj_keys = Object.keys(pyj_files);
+    for (var i = 0; i < pyj_keys.length; i++) {
+        RapydScript.file_data['pyj_src/' + pyj_keys[i]] = pyj_files[pyj_keys[i]];
+    }
+    console.log('VFS INIT: loaded ' + pyj_keys.length + ' pyj files into file_data');
+}
+
 async function compile(src, options) {
-    if (!compiler_lazy.compiler) compiler_lazy.compiler = await compiler_lazy.promise;
-    return await compiler_lazy.compiler.compile(src, options);
+    // Use standalone RapydScript.compile with basedir='pyj_src' (files in file_data)
+    var code = await RapydScript.compile(src, options.filename, {
+        beautify: options.beautify,
+        private_scope: options.private_scope,
+        omit_baselib: !options.keep_baselib,
+        source_map: options.source_map,
+        basedir: 'pyj_src',
+        libdir: '__stdlib__',
+    });
+    return {code: code, source_map: ''};
 }
 window.compile = compile;
 new QWebChannel(qt.webChannelTransport, async function (channel) {
     window.py_bridge = channel.objects.py_bridge;
+    load_pyj_files();
     document.title = 'compiler initialized';
 })
 })();
@@ -408,6 +465,9 @@ def compile_pyj(
 ) -> dict[str, str]:
     if isinstance(data, bytes):
         data = data.decode('utf-8')
+    # On Windows, convert backslashes to forward slashes so the JS compiler
+    # can correctly derive import directories from the filename
+    filename = filename.replace('\\', '/')
     options = {
         'beautify': beautify,
         'private_scope': private_scope,

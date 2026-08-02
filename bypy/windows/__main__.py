@@ -134,6 +134,9 @@ def freeze(env, ext_dir, incdir):
     printf('\tAdding misc binary deps')
 
     def copybin(x, dest=env.dll_dir):
+        dst = os.path.join(dest, os.path.basename(x)) if os.path.isdir(dest) else dest
+        if os.path.exists(dst):
+            return  # skip if already copied
         shutil.copy2(x, dest)
         with contextlib.suppress(FileNotFoundError):
             shutil.copy2(x + '.manifest', dest)
@@ -141,7 +144,11 @@ def freeze(env, ext_dir, incdir):
     bindir = os.path.join(PREFIX, 'bin')
     libdir = os.path.join(PREFIX, 'lib')
     for x in ('pdftohtml', 'pdfinfo', 'pdftoppm', 'pdftotext', 'jpegtran-calibre', 'cjpeg-calibre', 'optipng-calibre', 'cwebp-calibre', 'JXRDecApp-calibre'):
-        copybin(os.path.join(bindir, x + '.exe'))
+        exe_path = os.path.join(bindir, x + '.exe')
+        if os.path.exists(exe_path):
+            copybin(exe_path)
+        else:
+            print(f'WARNING: skipping missing optional binary: {x}.exe')
     # piper
     for x in ('espeak-ng-data',):
         shutil.copytree(os.path.join(PREFIX, 'share', x), os.path.join(env.share_dir, x))

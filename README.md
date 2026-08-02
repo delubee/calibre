@@ -43,6 +43,12 @@ If you find it useful, please consider contributing to support its development.
 See [Build instructions](bypy/README.rst) for instructions on how to build the
 calibre binaries and installers for all the platforms calibre supports.
 
+**[为什么要在 Windows 上编译 calibre：一次 AI 驱动的完整踩坑实录](build_calibre_windows.md)**
+—— 在纯 Windows 环境下从源码编译生成 MSI 安装包的完整记录（中文）。
+
+**[Calibre Windows 构建指南](windows_build.md)**
+—— 纯 Windows 环境下从源码构建 MSI 安装包的详细步骤文档（中文）。
+
 ## calibre package versions in various repositories
 
 [![Packaging Status](https://repology.org/badge/vertical-allrepos/calibre.svg?columns=3&header=calibre)](https://repology.org/project/calibre/versions)
