@@ -19,6 +19,20 @@ WINDOWS_SLEEP_FOR_RETRY_TIME = 2  # seconds
 WindowsFileId = tuple[int, int, int]
 
 
+def makedirs_with_retry(path: str, attempts: int = 4) -> None:
+    # Some filesystems, notably FUSE-based mounts such as rclone, propagate
+    # deletions/creations with a delay, so creating a directory that was just
+    # removed can transiently fail. Retry a few times.
+    for attempt in range(attempts):
+        try:
+            os.makedirs(make_long_path_useable(path), exist_ok=True)
+            return
+        except OSError:
+            if attempt == attempts - 1:
+                raise
+            time.sleep(WINDOWS_SLEEP_FOR_RETRY_TIME)
+
+
 class UnixFileCopier:
     def __init__(self, delete_all=False, allow_move=False):
         self.delete_all = delete_all
@@ -87,6 +101,11 @@ class WindowsFileCopier:
         self.folder_to_handle_map: dict[str, winutil.Handle] = {}
         self.folders: list[str] = []
         self.copy_map: dict[str, str] = {}
+        # Whether deletion can be done via delete-on-close handles. Some
+        # filesystems, notably FUSE-based mounts such as rclone, do not support
+        # opening files with DELETE access or delete-on-close, in which case we
+        # fall back to explicit removal (e.g. shutil.rmtree) done by the caller.
+        self.delete_via_handles = delete_all
 
     def register(self, path: str, dest: str) -> None:
         with suppress(OSError):
@@ -107,7 +126,7 @@ class WindowsFileCopier:
         # Do not open symbolic link target to prevent unwanted delete_on_close
         flags |= getattr(winutil, 'FILE_FLAG_OPEN_REPARSE_POINT', 0x00200000)
         access_flags = winutil.GENERIC_READ
-        if self.delete_all:
+        if self.delete_all and self.delete_via_handles:
             access_flags |= winutil.DELETE
         share_flags = winutil.FILE_SHARE_DELETE if self.allow_move else 0
         try:
@@ -123,6 +142,12 @@ class WindowsFileCopier:
                 if retry_on_sharing_violation:
                     time.sleep(WINDOWS_SLEEP_FOR_RETRY_TIME)
                     return self._open_file(path, False, is_folder)
+            elif self.delete_all and self.delete_via_handles:
+                # The filesystem (e.g. a rclone/FUSE mount) does not support
+                # opening with DELETE access, fall back to reading only and
+                # rely on the caller to remove the source explicitly.
+                self.delete_via_handles = False
+                return winutil.create_file(make_long_path_useable(path), winutil.GENERIC_READ, share_flags, winutil.OPEN_EXISTING, flags)
             raise
 
     def open_all_handles(self) -> None:
@@ -144,7 +169,12 @@ class WindowsFileCopier:
         while self.path_to_handle_map:
             path, h = next(iter(self.path_to_handle_map.items()))
             if delete_on_close:
-                winutil.set_file_handle_delete_on_close(h, True)
+                try:
+                    winutil.set_file_handle_delete_on_close(h, True)
+                except OSError:
+                    # The filesystem (e.g. a rclone/FUSE mount) does not support
+                    # delete-on-close, the source will be removed by the caller.
+                    pass
             h.close()
             self.path_to_handle_map.pop(path)
         while self.folder_to_handle_map:
@@ -156,13 +186,15 @@ class WindowsFileCopier:
                     # Ignore dir not empty errors. Should never happen but we
                     # ignore it as the UNIX semantics are to not delete folders
                     # during __exit__ anyway and we don't want to leak the handle.
-                    if err.winerror != winutil.ERROR_DIR_NOT_EMPTY:
-                        raise
+                    # Also ignore other errors as some filesystems do not support
+                    # delete-on-close at all.
+                    if getattr(err, 'winerror', None) not in (winutil.ERROR_DIR_NOT_EMPTY, None) and err.winerror != winutil.ERROR_DIR_NOT_EMPTY:
+                        pass
             h.close()
             self.folder_to_handle_map.pop(path)
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
-        self.close_all_handles(delete_on_close=self.delete_all and exc_val is None)
+        self.close_all_handles(delete_on_close=self.delete_all and self.delete_via_handles and exc_val is None)
 
     def copy_all(self) -> None:
         for src_path, dest_path in self.copy_map.items():
@@ -179,7 +211,10 @@ class WindowsFileCopier:
                     if not raw:
                         break
                     f.write(raw)
-            shutil.copystat(make_long_path_useable(src_path), make_long_path_useable(dest_path), follow_symlinks=False)
+            with suppress(OSError):
+                # Failure to copy metadata is not critical and is
+                # unsupported on some filesystems such as rclone mounts.
+                shutil.copystat(make_long_path_useable(src_path), make_long_path_useable(dest_path), follow_symlinks=False)
 
     def rename_all(self) -> None:
         for src_path, dest_path in self.copy_map.items():
@@ -234,8 +269,11 @@ def register_folder_recursively(
             path = os.path.join(dirpath, d)
             dest = dest_from_entry(dirpath, d)
             if not read_only:
-                os.makedirs(make_long_path_useable(dest), exist_ok=True)
-                shutil.copystat(make_long_path_useable(path), make_long_path_useable(dest), follow_symlinks=False)
+                makedirs_with_retry(dest)
+                with suppress(OSError):
+                    # Failure to copy directory metadata is not critical, and
+                    # is unsupported on some filesystems such as rclone mounts.
+                    shutil.copystat(make_long_path_useable(path), make_long_path_useable(dest), follow_symlinks=False)
             copier.register_folder(path)
         for f in filenames:
             path = os.path.join(dirpath, f)
@@ -275,7 +313,7 @@ def copy_tree(
             dest = dest.decode(filesystem_encoding)
 
     dest = os.path.abspath(dest)
-    os.makedirs(dest, exist_ok=True)
+    makedirs_with_retry(dest)
     if samefile(src, dest):
         raise ValueError(f'Cannot copy tree if the source and destination are the same: {src!r} == {dest!r}')
     dest_dir = dest
@@ -287,17 +325,19 @@ def copy_tree(
         copier.copy_all()
 
     if delete_source and os.path.exists(make_long_path_useable(src)):
-        try:
-            shutil.rmtree(make_long_path_useable(src))
-        except FileNotFoundError:
-            # some kind of delayed folder removal on handle close on Windows? Or exists() is succeeding but
-            # rmdir() is failing? Or something deleted the
-            # folder between the call to exists() and rmtree(). Windows is full
-            # of nanny programs that keep users safe from "themselves".
-            pass
-        except OSError:
-            if iswindows:
-                time.sleep(WINDOWS_SLEEP_FOR_RETRY_TIME)
+        for attempt in range(4):
+            try:
                 shutil.rmtree(make_long_path_useable(src))
-            else:
-                raise
+                break
+            except FileNotFoundError:
+                # some kind of delayed folder removal on handle close on Windows? Or exists() is succeeding but
+                # rmdir() is failing? Or something deleted the
+                # folder between the call to exists() and rmtree(). Windows is full
+                # of nanny programs that keep users safe from "themselves".
+                break
+            except OSError:
+                if not iswindows or attempt == 3:
+                    raise
+                # Removal can be slow to propagate on network/FUSE filesystems
+                # (e.g. rclone mounts), retry a few times.
+                time.sleep(WINDOWS_SLEEP_FOR_RETRY_TIME)

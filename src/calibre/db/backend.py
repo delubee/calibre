@@ -52,7 +52,7 @@ from calibre.library.field_metadata import FieldMetadata
 from calibre.ptempfile import PersistentTemporaryFile, TemporaryFile
 from calibre.utils import pickle_binary_string, unpickle_binary_string
 from calibre.utils.config import from_json, prefs, to_json, tweaks
-from calibre.utils.copy_files import copy_files, copy_tree, rename_files, windows_check_if_files_in_use
+from calibre.utils.copy_files import copy_files, copy_tree, makedirs_with_retry, rename_files, windows_check_if_files_in_use
 from calibre.utils.date import EPOCH, parse_date, utcfromtimestamp, utcnow
 from calibre.utils.filenames import (
     atomic_rename,
@@ -478,15 +478,20 @@ def set_global_state(backend):
     load_user_template_functions(backend.library_id, (), precompiled_user_functions=backend.get_user_template_functions())
 
 
-def rmtree_with_retry(path, sleep_time=1):
-    try:
-        shutil.rmtree(path)
-    except OSError as e:
-        if e.errno == errno.ENOENT and not os.path.exists(path):
+def rmtree_with_retry(path, sleep_time=1, attempts=4):
+    for attempt in range(attempts):
+        try:
+            shutil.rmtree(path)
             return
-        if iswindows and getattr(e, 'winerror') == winutil.ERROR_SHARING_VIOLATION:
-            time.sleep(sleep_time)  # In case something has temporarily locked a file
-        shutil.rmtree(path)
+        except OSError as e:
+            if e.errno == errno.ENOENT and not os.path.exists(path):
+                return
+            if not iswindows or attempt >= attempts - 1:
+                raise
+            # On Windows something may have temporarily locked a file, or a
+            # FUSE-based mount (e.g. rclone) may propagate changes with a
+            # delay, so retry a few times.
+            time.sleep(sleep_time)
 
 
 class DB:
@@ -1343,7 +1348,7 @@ class DB:
             return ans.fetchall()
         try:
             return next(ans)[0]
-        except StopIteration, IndexError:
+        except (StopIteration, IndexError):
             return None
 
     def last_insert_rowid(self):
@@ -1789,7 +1794,7 @@ class DB:
                         return fmt_path
                     try:
                         shutil.move(x, fmt_path)
-                    except shutil.SameFileError, OSError:
+                    except (shutil.SameFileError, OSError):
                         # some other process synced in the file since the last
                         # os.path.exists()
                         return x
@@ -2051,7 +2056,7 @@ class DB:
         path = os.path.join(self.library_path, path)
         dest = os.path.join(path, fname + fmt)
         if not os.path.exists(path):
-            os.makedirs(path)
+            makedirs_with_retry(path)
         size = 0
         if current_name is not None:
             old_path = os.path.join(path, current_name + fmt)
@@ -2086,11 +2091,15 @@ class DB:
                 shutil.copyfileobj(stream, f)
                 size = f.tell()
             if mtime is not None:
-                os.utime(dest, (mtime, mtime))
+                with suppress(OSError):
+                    # Setting timestamps is unsupported on some filesystems
+                    # such as rclone mounts.
+                    os.utime(dest, (mtime, mtime))
         elif os.path.exists(dest):
             size = os.path.getsize(dest)
             if mtime is not None:
-                os.utime(dest, (mtime, mtime))
+                with suppress(OSError):
+                    os.utime(dest, (mtime, mtime))
 
         return size, fname
 
@@ -2197,7 +2206,7 @@ class DB:
             with suppress(OSError):
                 remove_dir_if_empty(parent, ignore_metadata_caches=True)
         else:
-            os.makedirs(tpath)
+            makedirs_with_retry(tpath)
         update_paths_in_db()
 
     def copy_extra_file_to(self, book_id, book_path, relpath, stream_or_path):
